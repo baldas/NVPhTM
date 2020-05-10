@@ -1,0 +1,47 @@
+# TMBUILD = phasedTM
+# ======== Defines ========
+CC       := $(CXX)
+CPPFLAGS += -DNDEBUG
+CPPFLAGS += -I../lib -I../common/$(TMBUILD) -DHW_SW_PATHS
+CFLAGS   += -Wall -Wextra
+CFLAGS   += -O3
+
+LD       := $(CXX)
+LDFLAGS  += -lpthread -lrt
+
+ifeq ($(PHASED_STM), tinystm)
+  LIBDIR   ?= ../../../tinySTM
+  CPPFLAGS += -DSTM=TinySTM -I$(LIBDIR)/include 
+  LDFLAGS  += -L$(LIBDIR)/lib -lstm
+  LIBDEPS    += $(LIBDIR)/lib/libstm.a
+else
+  ifeq ($(PHASED_STM), norec)
+    LIBDIR ?= ../../../NOrec
+    CPPFLAGS += -DSTM=NOrec -I$(LIBDIR)/include 
+    LDFLAGS  += -L$(LIBDIR) -lnorec
+    LIBDEPS  += $(LIBDIR)/libnorec.a
+  else
+	  $(error no STM specified!)
+  endif
+endif
+
+ARCH = $(shell uname -m)
+
+ifeq ($(ARCH), x86_64)
+  # Intel RTM
+  CFLAGS += -mrtm 
+else
+  ifeq ($(ARCH), ppc64le)
+    # IBM PowerTM
+    CFLAGS += -mhtm
+  else
+	  $(error unsupported architecture)
+  endif
+endif
+
+CPPFLAGS += -I../ -I../../../htm -I../../../phasedTM
+LDFLAGS  += -L../../../phasedTM/ -lphTM
+LIBDEPS  += ../../../phasedTM/libphTM.a
+
+
+include ../common/Makefile.common

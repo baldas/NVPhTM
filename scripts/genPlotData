@@ -1,0 +1,336 @@
+#!/bin/bash
+
+source $PWD/scripts/scripts.cfg
+[ $? != 0 ] && echo -e "\nerror: running scripts from wrong directory!" && exit -1
+
+normScript='BEGIN{
+	ntype=normtype
+	nval=normval
+}
+{
+	mean = $1
+	delta = $2
+}
+END{
+	if (ntype == 1){
+		# speedup
+		mean = nval / mean
+	} else if (ntype == 2) {
+		# energy normalized
+		mean = mean / nval
+	}
+	printf "%.3lf %.3lf ", mean, delta
+}'
+
+geomeanScript='BEGIN{
+	first=1;
+	n=0;
+	i=1
+}
+{
+	if(first == 1){
+		if($1 != ""){
+			for(j=2; j <= NF; j++){
+				m[i,j] = $j
+			}
+			m[i++,1] = $1
+			ncols = NF
+		} else {
+			nlines=i-1
+			i=1
+			first = 0
+			n++
+		}
+	} else {
+		if($1 != ""){
+			for(j=2; j <= NF; j++){
+				m[i,j] *= $j
+			}
+			m[i++,1] = $1
+			ncols = NF
+		} else {
+			nlines=i-1
+			i=1
+			n++
+		}
+	}
+}
+END{
+	for(i=1; i <= nlines; i++){
+		printf("%d ", m[i,1]);
+		for(j=2; j <= ncols; j++){
+			printf("%lf ", m[i,j] ^ (1.0/n));
+		}
+		printf("\n")
+	}
+}'
+
+function getNormVal {
+
+	local regex=$1
+	OIFS=$IFS
+	IFS='-'
+	local tokens=( $2 )
+	IFS=$OIFS
+
+
+	local n=$(echo ${tokens[@]} | wc -w)
+	local app=${tokens[0]}
+	local build=${tokens[1]}
+
+	if [[ "$2" =~ "rtm" || "$2" =~ "x86_64" ]]; then
+		arch=x86_64
+	elif [[ "$2" =~ "powerTM" || "$2" =~ "ppc64le" ]]; then
+		arch=ppc64le
+	else
+		echo 'error: unknown arch!' && exit -1
+	fi
+	
+	case $prefix in
+		intset_* | pintset)
+			local mem=${tokens[$n-4]}
+			local i=${tokens[$n-3]}
+			local u=${tokens[$n-2]}
+			local log="$LOGDIR/$app-seq-$arch-$mem-$i-$u-n1.log"
+			;;
+		*) # STAMP APPS
+			local mem=${tokens[$n-2]}
+			local log="$LOGDIR/$app-seq-$arch-$mem-1.log"
+			;;
+	esac
+
+
+	echo $(grep -e "$regex" $log | awk '{print $3}' | \
+		$PWD/scripts/mean_ci.R)
+}
+
+function fullBuildName {
+	local build=$1
+	local TMP=''
+	case $build in
+		tinystm_*)
+			TMP="$TMP $(cross_product $build "$_tinySTM_DESIGNS" "$_tinySTM_CMS" "$_ORT_HASHES")" ;;
+		phasedTM_*)
+			local b="$(cross_product ${build} "${_PHASEDTM_DESIGNS}")"
+			for stm in ${_PHASEDTM_STMS}; do
+				case $stm in
+					tinystm)
+						local tmp="$(cross_product "${_tinySTM_DESIGNS}" "${_tinySTM_CMS}" "${_ORT_HASHES}")"
+						TMP="$TMP $(cross_product "$b" "$tmp")"
+						;;
+					norec)
+						local tmp="norec"
+						TMP="$TMP $(cross_product "$b" "$tmp")"
+						;;
+				esac
+			done
+		;;
+		rtm | powerTM | nvm_rtm)
+			TMP="$TMP $(cross_product $build "$_TSX_LOCKS")" ;;
+		hle | lock | norec_* | rh_norec_* | hytm_norec_* | hyco_*)
+			TMP="$TMP $build" ;;
+		pstm* | nvphtm* | nvm_nvhtm*)
+			TMP="$TMP $build" ;;
+	esac
+	echo $TMP
+}
+
+function genDataFile {
+
+	local DATAFILES="$1"
+	local PREFIXES="$2"
+	local HEADER="$3"
+	local ROWS="$4"
+	local COLS="$5"
+
+	for	datafile in ${DATAFILES}; do
+		case $datafile in
+			speedup)
+				local datafileregex='^Time[ ]\+= '
+				local colawkregex='{print $3}'
+				local hasNormVal=1
+				local normtype=1 ;;
+			energy)
+				local datafileregex='^Energy[ ]\+= '
+				local colawkregex='{print $3}'
+				local hasNormVal=1
+				local normtype=2 ;;
+			time)
+				local datafileregex='^Time[ ]\+= '
+				local colawkregex='{print $3}'
+				local hasNormVal=0
+				local normtype=3 ;;
+			throughput)
+				local datafileregex='^#txs[ ]\+: '
+				local colawkregex='{match($4, "[0-9.]+", m); print m[0]}'
+				local hasNormVal=0
+				local normtype=3 ;;
+			norm-throughput)
+				local datafileregex='^#txs[ ]\+: '
+				local colawkregex='{match($4, "[0-9.]+", m); print m[0]}'
+				local hasNormVal=1
+				local normtype=2 ;;
+			transitions)
+				local datafileregex='^hw->sw: '
+				local colawkregex='{print $3}'
+				local hasNormVal=0
+				local normtype=3 ;;
+			commits)
+				local datafileregex='^#commits[ ]\+: '
+				local colawkregex='{print $4}'
+				local hasNormVal=0
+				local normtype=3 ;;
+			conflicts)
+				local datafileregex='^#conflicts[ ]\+: '
+				local colawkregex='{print $3}'
+				local hasNormVal=0
+				local normtype=3 ;;
+			capacity)
+				local datafileregex='^#capacity[ ]\+: '
+				local colawkregex='{print $3}'
+				local hasNormVal=0
+				local normtype=3 ;;
+			falseConflict)
+				local datafileregex='^nb_total_conflicts:'
+				local colawkregex='{print $2}'
+				local hasNormVal=0
+				local normtype=3 ;;
+			falseConfRatio)
+				local datafileregex='^nb_total_conflicts:'
+				local colawkregex='{print($2 == 0.00) ? 0.00 : ($5/$2)*100.0 }'
+				local hasNormVal=0
+				local normtype=3 ;;
+		esac
+		
+		for prefix in ${PREFIXES}; do
+			case $prefix in
+				intset_*)
+					local SUFFIXES="$INTSET_SUFFIXES" ;;
+				pintset)
+					local SUFFIXES="$PINTSET_SUFFIXES" ;;
+				hintset)
+					local SUFFIXES="$HINTSET_SUFFIXES" ;;
+				conflict* | capacity*)
+					local SUFFIXES="$CONFLICT_SUFFIXES" ;;
+				phased*)
+					local SUFFIXES="$PHASED_SUFFIXES" ;;
+			esac
+			for suffix in ${SUFFIXES}; do
+				local datafilename=$DATADIR/${prefix}${suffix}.$datafile
+				echo -n "generating '$datafilename'..."
+				echo "$HEADER" > $datafilename
+				for row in ${ROWS}; do
+					echo -n "$row " >> $datafilename
+					for column in ${COLS}; do
+						local logfilename="$LOGDIR/${prefix}${column}$(sed 's|@|'$row'|' <<<$suffix).log"
+						[[ ! -e $logfilename ]] && echo -n "1 0 " >> $datafilename && continue
+						[[ $hasNormVal != 0 ]] && \
+							local normval="$(getNormVal "$datafileregex" ${prefix}${column}${suffix} | awk '{print $1}')"
+						grep -e "$datafileregex" $logfilename | awk "$colawkregex" | \
+							$PWD/scripts/mean_ci.R \
+							awk -v normtype=$normtype -v normval=$normval "$normScript" >> $datafilename
+					done # FOR EACH COLUMN
+					echo >> $datafilename
+				done # FOR EACH ROW
+				echo "done."
+			done # FOR EACH SUFFIX
+		done # FOR EACH PREFIX
+
+		for suffix in ${SUFFIXES}; do
+			local tmpfile="tmpfile.dat"
+			echo -n > $tmpfile
+			for prefix in ${PREFIXES}; do
+				sed -n '2,$p' $DATADIR/${prefix}${suffix}.$datafile >> $tmpfile
+				echo >> $tmpfile
+			done # FOR EACH PREFIX
+			local geomeanfile=$DATADIR/geomean${suffix}.$datafile
+			echo "$HEADER" > $geomeanfile
+			cat $tmpfile | awk "$geomeanScript" >> $geomeanfile
+			rm -f $tmpfile
+		done # FOR EACH SUFFIX
+	done # FOR EACH DATA FILE
+}
+
+function generate_data {
+
+	local DATAFILES="$1"
+	local APPS=${2}
+	local _APPS=${!APPS}
+	local ROWS=${3}
+	local _ROWS=${!3}
+
+	[ -d $DATADIR ] || mkdir $DATADIR
+	
+	# backup _BUILDS variable
+	local BUILDS_BACKUP="$_BUILDS"
+
+	perBuildData=true;
+	case $_COLUMN in
+		BUILDS | MEMALLOCS)
+			perBuildData=false ;;
+	esac
+	
+	local AUX=''
+	if [ $perBuildData == false ]; then
+		local TMP=''
+		for build in ${_BUILDS}; do
+			TMP="$TMP $(fullBuildName $build)"
+		done
+		_BUILDS="$(echo -n $TMP | sed 's|^ ||')"
+		AUX=('_BUILDS' '_MEMALLOCS')
+	else
+		case $_BUILDS in
+			tinystm)
+				AUX=('_BUILDS' '_tinySTM_DESIGNS' '_tinySTM_CMS' '_ORT_HASHES') ;;
+			rtm)
+				AUX=('_BUILDS' '_TSX_LOCKS') ;;
+		esac
+	fi
+
+	local cols="_${_COLUMN}"
+	local HEADER=''
+	local COLS=''
+	for column in ${!cols}; do
+		COLS="${COLS} -$column"
+		h="$(echo $column | sed 's|^|"|;s|$|"|;s|-| |g;s|_| |g')"
+		HEADER="${HEADER}$h $h "
+	done
+	HEADER="- ${HEADER}"
+	
+	local i=0
+	local PREFIXES="${_APPS}"
+	while [ ! -z "${AUX[$i]}" -a "_$_COLUMN" != "${AUX[$i]}" ]; do
+		PREFIXES="$(cross_product "${PREFIXES}" "${!AUX[$i]}")"
+		i=$((i+1))
+	done
+	i=$((i+1))
+	
+	SUFFIXES=''
+	while [ ! -z "${AUX[$i]}" ]; do
+		SUFFIXES="$(cross_product "${SUFFIXES}" "${!AUX[$i]}")"
+		i=$((i+1))
+	done
+	
+	if [ $perBuildData == true ]; then
+		SUFFIXES="$(cross_product "${SUFFIXES}" "${_MEMALLOCS}")"
+	fi
+
+	if [ "$APPS" == "_MICROBENCH_APPS" ]; then
+		[ "$ROWS" == "_INITSIZES" ]   && _INITSIZES='@'
+		[ "$ROWS" == "_UPDATERATES" ] && _UPDATERATES='@'
+		[ "$ROWS" == "_NTHREADS" ]    && _NTHREADS='@'
+		INTSET_SUFFIXES="$(cross_product "${SUFFIXES}" "$_INITSIZES" "$_UPDATERATES" "$_NTHREADS")"
+		CONFLICT_SUFFIXES="$(cross_product "${SUFFIXES}" "$_UPDATERATES" "$_NTHREADS")"
+		PHASED_SUFFIXES="$(cross_product "${SUFFIXES}" "$_NTHREADS")"
+		PINTSET_SUFFIXES="$(cross_product "${SUFFIXES}" "$_PHASECONFIGS" "$_NTHREADS")"
+		HINTSET_SUFFIXES="$(cross_product "${SUFFIXES}" "$_INITSIZES" \
+      "$_UPDATERATES" "$_NBTREES" "$_NTHREADS")"
+	else
+		SUFFIXES="$(cross_product "${SUFFIXES}" '@')"
+	fi
+	
+	# restore _BUILDS variable
+	_BUILDS="$BUILDS_BACKUP"
+	
+	genDataFile "${DATAFILES}" "${PREFIXES}" "$HEADER" "${_ROWS}" "${COLS}"
+}

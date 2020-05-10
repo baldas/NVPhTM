@@ -1,0 +1,699 @@
+#!/bin/bash
+
+source $PWD/scripts/scripts.cfg
+[ $? != 0 ] && echo -e "\nerror: running scripts from wrong directory!" && exit -1
+
+function usage {
+	
+	echo $0' [-d <tinySTM DESIGN>]  [-m <tinySTM CM>] [-H ORT hash] [-i <intset app>]'
+	echo -e '\t[-b <build>] [-D <RTM CM>]  [-l <TSX lock>] [-s <stamp app>]'
+
+	echo
+	echo '-d <tinySTM DESIGN>'
+	echo "${tinySTM_DESIGNS// / | }"
+	echo 'default = ETL'
+
+	echo
+	echo '-m <tinySTM CM>'
+	echo "${tinySTM_CMS// / | }"
+	echo 'default = SUICIDE'
+	
+	echo
+	echo '-H <ORT hash>'
+	echo "${ORT_HASHES// / | }"
+	echo 'default = ORIGINAL'
+	
+	echo
+	echo '-l <TSX lock>'
+	echo "${TSX_LOCKS// / | }"
+	echo 'default = simple_lock'
+
+	echo
+	echo '-s <stamp app>'
+	echo "${STAMP_APPS// / | }"
+	echo 'default = NONE'
+	
+	echo
+	echo '-i <intset app>'
+	echo "${INTSET_APPS// / | }"
+	echo 'default = NONE'
+
+	echo
+	echo '-b <build>'
+	echo "${BUILDS// / | }"
+	echo 'default = ALL'
+}
+
+function compile_stamp_apps {
+
+	for app in ${_STAMP_APPS}; do
+		local APP_SRC_PATH=$STAMP/apps/$app
+		local BIN_APP_PATH=$STAMP/$build/$app
+		make -C $APP_SRC_PATH -f Makefile \
+			TMBUILD=$build clean ${MAKE_OPTIONS} 2> /dev/null
+		make -C $APP_SRC_PATH -f Makefile \
+			TMBUILD=$build ${MAKE_OPTIONS} 2> /dev/null
+		mv $BIN_APP_PATH/$app $BIN_APP_PATH/${app}-${build}${suffix}
+		echo -e "\t++ ${app} compiled"
+	done # FOR EACH APP
+}
+
+function compile_microbench_apps {
+
+	for app in ${_MICROBENCH_APPS}; do
+		local APP_SRC_PATH=$MICROBENCH/apps/$(sed 's|_[a-z]\+$||' <<<$app)
+		local BIN_APP_PATH=$MICROBENCH/$build
+		make -C $APP_SRC_PATH -f Makefile \
+			TMBUILD=$build APP=$app clean ${MAKE_OPTIONS} 2> /dev/null
+		make -C $APP_SRC_PATH -f Makefile \
+			TMBUILD=$build APP=$app ${MAKE_OPTIONS} 2> /dev/null
+		mv $BIN_APP_PATH/$app $BIN_APP_PATH/${app}-${build}${suffix}
+		echo -e "\t++ ${app} compiled"
+	done # FOR EACH APP
+}
+
+function compile_with_tinystm {
+
+	local phasedTMsuffix="$1"
+
+	test -z "$_tinySTM_DESIGNS"       && _tinySTM_DESIGNS='ETL'
+	test "$_tinySTM_DESIGNS" == "ALL" && _tinySTM_DESIGNS=$tinySTM_DESIGNS
+	test -z "$_tinySTM_CMS"           && _tinySTM_CMS='SUICIDE'
+	test "$_tinySTM_CMS" == "ALL"     && _tinySTM_CMS=$tinySTM_CMS
+	test -z "$_ORT_HASHES"            && _ORT_HASHES='ORIGINAL'
+	test "$_ORT_HASHES" == "ALL"      && _ORT_HASHES=$ORT_HASHES
+			
+	for design in ${_tinySTM_DESIGNS}; do
+		for cm in ${_tinySTM_CMS}; do
+			for ort_hash in ${_ORT_HASHES}; do
+				sed -e "/${!design}/s|# ||;/${!cm}/s|# ||"   \
+						-e "/${ORT_PROFILING}/s|# ||"            \
+						-e "/${COMMIT_RATE_PROFILING}/s|# ||"    \
+						-e "/${RW_SET_PROFILING}/s|# ||"         \
+						-e "/${NO_DUPLICATES_IN_RW_SETS}/s|# ||" \
+						-e "/${ort_hash}/s|# ||"      				   \
+						$tinySTM/Makefile.template > $tinySTM/Makefile
+				touch $tinySTM/Makefile
+				make -C $tinySTM clean ${MAKE_OPTIONS}
+				make -C $tinySTM ${MAKE_OPTIONS}
+				
+				suffix=-${design}-${cm}-${ort_hash}
+				if [ $build == 'phasedTM' ]; then
+					local s=$( [ $(uname -m) == 'x86_64' ] && echo 'rtm' || echo 'powerTM' )
+					suffix="_$s-$phasedTMsuffix$suffix"
+				else
+					local s=$(uname -m)
+					suffix="_$s$suffix"
+				fi
+				echo "## $build ${suffix} compiled"
+			
+				compile_stamp_apps
+				compile_microbench_apps
+			done # FOR EACH ORT HASH
+		done # FOR EACH CM
+	done # FOR EACH DESIGN
+
+}
+
+function compile_with_pstm {
+
+	cd $MINIMAL_NVM
+	(./compile.sh)>>/dev/null
+	[[ $? != 0 ]] && echo "error: failed to compile minimal_nvm"
+	cd $BASEPATH
+
+	# backup global variable
+	local MAKE_OPTIONS_backup=$MAKE_OPTIONS
+
+	MAKE_OPTIONS="$MAKE_OPTIONS PERSISTENT_TM=1"
+
+	compile_with_norec
+
+	# restore global variable
+	MAKE_OPTIONS=$MAKE_OPTIONS_backup
+}
+
+function compile_with_pstm_tinystm {
+
+	cd $MINIMAL_NVM
+	(./compile.sh)>>/dev/null
+	[[ $? != 0 ]] && echo "error: failed to compile minimal_nvm"
+	cd $BASEPATH
+
+	# backup global variable
+	local MAKE_OPTIONS_backup=$MAKE_OPTIONS
+
+	MAKE_OPTIONS="$MAKE_OPTIONS PERSISTENT_TM=1"
+
+	compile_with_tinystm
+
+	# restore global variable
+	MAKE_OPTIONS=$MAKE_OPTIONS_backup
+}
+
+function compile_with_pstm_chk {
+
+	local SOLUTION=NVHTM_PC
+	local _CHECKPOINT="FORK"
+
+	cd $MINIMAL_NVM
+	(./compile.sh 2>&1)>>/dev/null
+	[[ $? != 0 ]] && echo "error: failed to compile minimal_nvm"
+	cd $BASEPATH
+
+	cd $NVM_HTM_ALG
+	(./compile.sh 2>&1)>>/dev/null
+	[[ $? != 0 ]] && echo "error: failed to compile htm_alg"
+	cd $BASEPATH
+
+	cd $NVM
+	(./compile.sh ${SOLUTION} $_CHECKPOINT $_LOG_SIZE 2>&1)>>/dev/null
+	[[ $? != 0 ]] && echo "error: failed to compile nh"
+	cd $BASEPATH
+
+	# backup global variable
+	local MAKE_OPTIONS_backup=$MAKE_OPTIONS
+
+	MAKE_OPTIONS="$MAKE_OPTIONS SOLUTION=$SOLUTION"
+	MAKE_OPTIONS="$MAKE_OPTIONS DO_CHECKPOINT=${!_CHECKPOINT}"
+	MAKE_OPTIONS="$MAKE_OPTIONS LOG_SIZE=$_LOG_SIZE"
+
+	compile_with_norec
+
+	# restore global variable
+	MAKE_OPTIONS=$MAKE_OPTIONS_backup
+}
+
+function compile_with_nvm {
+
+	local SOLUTION=${!build}
+	if [[ $SOLUTION == NVHTM_* ]]; then
+		local _CHECKPOINT="FORK"
+	else
+		local _CHECKPOINT="NONE"
+	fi
+
+	cd $MINIMAL_NVM
+	(./compile.sh 2>&1)>>/dev/null
+	[[ $? != 0 ]] && echo "error: failed to compile minimal_nvm"
+	cd $BASEPATH
+
+	cd $NVM_HTM_ALG
+	(./compile.sh 2>&1)>>/dev/null
+	[[ $? != 0 ]] && echo "error: failed to compile htm_alg"
+	cd $BASEPATH
+
+	cd $NVM
+	(./compile.sh ${SOLUTION} $_CHECKPOINT $_LOG_SIZE 2>&1)>>/dev/null
+	[[ $? != 0 ]] && echo "error: failed to compile nh"
+	cd $BASEPATH
+
+	suffix=""
+	echo "## $build ${suffix} compiled"
+
+	# backup global variable
+	local MAKE_OPTIONS_backup=$MAKE_OPTIONS
+
+	MAKE_OPTIONS="$MAKE_OPTIONS SOLUTION=$SOLUTION"
+	MAKE_OPTIONS="$MAKE_OPTIONS DO_CHECKPOINT=${!_CHECKPOINT}"
+	MAKE_OPTIONS="$MAKE_OPTIONS LOG_SIZE=$_LOG_SIZE"
+
+	compile_stamp_apps
+	compile_microbench_apps
+
+	# restore global variable
+	MAKE_OPTIONS=$MAKE_OPTIONS_backup
+}
+
+function compile_with_nvm_rtm {
+
+	local SOLUTION=NVHTM_PC
+	[[ -z $_CHECKPOINT ]] && _CHECKPOINT="FORK"
+
+	cd $MINIMAL_NVM
+	(./compile.sh 2>&1)>>/dev/null
+	[[ $? != 0 ]] && echo "error: failed to compile minimal_nvm"
+	cd $BASEPATH
+
+	cd $NVM_HTM_ALG
+	(./compile.sh 2>&1)>>/dev/null
+	[[ $? != 0 ]] && echo "error: failed to compile htm_alg"
+	cd $BASEPATH
+
+	cd $NVM
+	(./compile.sh ${SOLUTION} $_CHECKPOINT $_LOG_SIZE 2>&1)>>/dev/null
+	[[ $? != 0 ]] && echo "error: failed to compile nh"
+	cd $BASEPATH
+
+
+	# backup global variable
+	local MAKE_OPTIONS_backup=$MAKE_OPTIONS
+
+	MAKE_OPTIONS="$MAKE_OPTIONS SOLUTION=$SOLUTION"
+	MAKE_OPTIONS="$MAKE_OPTIONS DO_CHECKPOINT=${!_CHECKPOINT}"
+	MAKE_OPTIONS="$MAKE_OPTIONS LOG_SIZE=$_LOG_SIZE"
+  MAKE_OPTIONS="$MAKE_OPTIONS USE_ABORT_LOG_CHECK=1"
+  MAKE_OPTIONS="$MAKE_OPTIONS DISABLE_PHASE_TRANSITIONS=1"
+
+	suffix="-simple_lock"
+	compile_with_phasedTM_noSW
+
+	# restore global variable
+	MAKE_OPTIONS=$MAKE_OPTIONS_backup
+}
+
+function compile_with_nvphtm {
+
+	local SOLUTION=NVHTM_PC
+	[[ -z $_CHECKPOINT ]] && _CHECKPOINT="FORK"
+
+	cd $MINIMAL_NVM
+	(./compile.sh 2>&1)>>/dev/null
+	[[ $? != 0 ]] && echo "error: failed to compile minimal_nvm"
+	cd $BASEPATH
+
+	cd $NVM_HTM_ALG
+	(./compile.sh 2>&1)>>/dev/null
+	[[ $? != 0 ]] && echo "error: failed to compile htm_alg"
+	cd $BASEPATH
+
+	cd $NVM
+	(./compile.sh $SOLUTION $_CHECKPOINT $_LOG_SIZE 2>&1)>>/dev/null
+	[[ $? != 0 ]] && echo "error: failed to compile nh"
+	cd $BASEPATH
+
+	# backup global variable
+	local MAKE_OPTIONS_backup=$MAKE_OPTIONS
+
+	MAKE_OPTIONS="$MAKE_OPTIONS SOLUTION=$SOLUTION"
+	MAKE_OPTIONS="$MAKE_OPTIONS DO_CHECKPOINT=${!_CHECKPOINT}"
+	MAKE_OPTIONS="$MAKE_OPTIONS LOG_SIZE=$_LOG_SIZE"
+
+	compile_with_phasedTM
+
+	# restore global variable
+	MAKE_OPTIONS=$MAKE_OPTIONS_backup
+}
+
+function compile_with_nvphtm_pstm {
+
+	local SOLUTION=NVHTM_PC
+	[[ -z $_CHECKPOINT ]] && _CHECKPOINT="FORK"
+
+	cd $MINIMAL_NVM
+	(./compile.sh 2>&1)>>/dev/null
+	[[ $? != 0 ]] && echo "error: failed to compile minimal_nvm"
+	cd $BASEPATH
+
+	cd $NVM_HTM_ALG
+	(./compile.sh 2>&1)>>/dev/null
+	[[ $? != 0 ]] && echo "error: failed to compile htm_alg"
+	cd $BASEPATH
+
+	cd $NVM
+	(./compile.sh $SOLUTION $_CHECKPOINT $_LOG_SIZE 2>&1)>>/dev/null
+	[[ $? != 0 ]] && echo "error: failed to compile nh"
+	cd $BASEPATH
+
+	# backup global variable
+	local MAKE_OPTIONS_backup=$MAKE_OPTIONS
+
+	MAKE_OPTIONS="$MAKE_OPTIONS SOLUTION=$SOLUTION"
+	MAKE_OPTIONS="$MAKE_OPTIONS DO_CHECKPOINT=${!_CHECKPOINT}"
+	MAKE_OPTIONS="$MAKE_OPTIONS LOG_SIZE=$_LOG_SIZE"
+	MAKE_OPTIONS="$MAKE_OPTIONS PERSISTENT_TM=1"
+  MAKE_OPTIONS="$MAKE_OPTIONS USE_NVM_HEURISTIC=1"
+  MAKE_OPTIONS="$MAKE_OPTIONS USE_ABORT_LOG_CHECK=1"
+
+	compile_with_phasedTM
+
+	# restore global variable
+	MAKE_OPTIONS=$MAKE_OPTIONS_backup
+}
+
+
+function compile_with_nvphtm_pstm_nh {
+
+	local SOLUTION=NVHTM_PC
+	[[ -z $_CHECKPOINT ]] && _CHECKPOINT="FORK"
+
+	cd $MINIMAL_NVM
+	(./compile.sh 2>&1)>>/dev/null
+	[[ $? != 0 ]] && echo "error: failed to compile minimal_nvm"
+	cd $BASEPATH
+
+	cd $NVM_HTM_ALG
+	(./compile.sh 2>&1)>>/dev/null
+	[[ $? != 0 ]] && echo "error: failed to compile htm_alg"
+	cd $BASEPATH
+
+	cd $NVM
+	(./compile.sh $SOLUTION $_CHECKPOINT $_LOG_SIZE 2>&1)>>/dev/null
+	[[ $? != 0 ]] && echo "error: failed to compile nh"
+	cd $BASEPATH
+
+	# backup global variable
+	local MAKE_OPTIONS_backup=$MAKE_OPTIONS
+
+	MAKE_OPTIONS="$MAKE_OPTIONS SOLUTION=$SOLUTION"
+	MAKE_OPTIONS="$MAKE_OPTIONS DO_CHECKPOINT=${!_CHECKPOINT}"
+	MAKE_OPTIONS="$MAKE_OPTIONS LOG_SIZE=$_LOG_SIZE"
+	MAKE_OPTIONS="$MAKE_OPTIONS PERSISTENT_TM=1"
+  MAKE_OPTIONS="$MAKE_OPTIONS USE_ABORT_LOG_CHECK=1"
+
+	compile_with_phasedTM
+
+	# restore global variable
+	MAKE_OPTIONS=$MAKE_OPTIONS_backup
+}
+
+
+function compile_with_wlpdstm {
+
+	local phasedTMsuffix="$1"
+
+	test -z "$_wpldstm_DESIGNS"       && _wlpdstm_DESIGNS='swisstm'
+	test "$_wlpdstm_DESIGNS" == "ALL" && _wlpdstm_DESIGNS=$wlpdstm_DESIGNS
+			
+	for design in ${_wlpdstm_DESIGNS}; do
+		make -C $WLPDSTM clean ${MAKE_OPTIONS}
+		make -C $WLPDSTM STM=$design ${MAKE_OPTIONS}
+				
+		suffix=-${design}
+		if [ $build == 'phasedTM' ]; then
+			local s=$( [ $(uname -m) == 'x86_64' ] && echo 'rtm' || echo 'powerTM' )
+			suffix="_$s-$phasedTMsuffix$suffix"
+		else
+			local s=$(uname -m)
+			suffix="_$s$suffix"
+		fi
+		echo "## $build ${suffix} compiled"
+			
+		compile_stamp_apps
+		compile_microbench_apps
+	done # FOR EACH DESIGN
+}
+
+function compile_with_phasedTM {
+
+	test -z "$_PHASEDTM_STMS"          && _PHASEDTM_STMS='norec'
+	test "$_PHASEDTM_STMS" == "ALL"    && _PHASEDTM_STMS=$PHASEDTM_STMS
+	test -z "$_PHASEDTM_DESIGNS"       && _PHASEDTM_DESIGNS='OPTIMIZED'
+	test "$_PHASEDTM_DESIGNS" == "ALL" && _PHASEDTM_DESIGNS=$PHASEDTM_DESIGNS
+
+	local MAKE_OPTIONS_copy="$MAKE_OPTIONS"
+	for stm in ${_PHASEDTM_STMS}; do
+		MAKE_OPTIONS="${MAKE_OPTIONS_copy} PHASED_STM=$stm"
+		for design in ${_PHASEDTM_DESIGNS}; do
+			sed -e "/${!design}/s|# ||" \
+				$PhasedTM/Makefile.template > $PhasedTM/Makefile
+			touch $PhasedTM/Makefile
+			make -C $PhasedTM clean ${MAKE_OPTIONS}
+			make -C $PhasedTM ${MAKE_OPTIONS}
+	    [[ $? != 0 ]] && echo "error: failed to build PhTM" && exit 1
+      
+      # if STAGNATION_PROFILING is defined, we should now allow NOREC to be
+      # compiled with that in phased compilation
+      MAKE_OPTIONS=`echo $MAKE_OPTIONS | sed s/PROFILING3=STAGNATION_PROFILING//`
+		
+      compile_with_$stm "$design"
+		done # FOR EACH PHASEDTM DESIGN
+	done # FOR EACH STM
+	MAKE_OPTIONS="$MAKE_OPTIONS_copy"
+}
+
+function compile_with_phasedTM_noSW {
+
+	test -z "$_PHASEDTM_DESIGNS"       && _PHASEDTM_DESIGNS='OPTIMIZED'
+	test "$_PHASEDTM_DESIGNS" == "ALL" && _PHASEDTM_DESIGNS=$PHASEDTM_DESIGNS
+
+	local MAKE_OPTIONS_copy="$MAKE_OPTIONS"
+	MAKE_OPTIONS="${MAKE_OPTIONS_copy} PHASED_STM=$stm"
+	for design in ${_PHASEDTM_DESIGNS}; do
+		sed -e "/${!design}/s|# ||" \
+			$PhasedTM/Makefile.template > $PhasedTM/Makefile.temp
+    # we must not define PHASEDTM for correct statistics
+    sed -e "/PHASEDTM/s|PHASEDTM|DUMB|" \
+      $PhasedTM/Makefile.temp > $PhasedTM/Makefile
+    rm $PhasedTM/Makefile.temp
+		touch $PhasedTM/Makefile
+		make -C $PhasedTM clean ${MAKE_OPTIONS}
+		make -C $PhasedTM ${MAKE_OPTIONS}
+	
+	  echo "## $build ${suffix} compiled"
+    compile_stamp_apps
+		compile_microbench_apps
+	done # FOR EACH PHASEDTM DESIGN
+	MAKE_OPTIONS="$MAKE_OPTIONS_copy"
+}
+
+function compile_with_norec {
+	
+	local phasedTMsuffix="$1"
+	
+	sed	-e "s|# DUMMY COMMENT||"               \
+	    -e "/${COMMIT_RATE_PROFILING}/s|# ||"  \
+			-e "/${RW_SET_PROFILING}/s|# ||"       \
+			-e "/${HYTM_LOCK_SUBSCRIPTION}/s|# ||" \
+			$NOrec/Makefile.template > $NOrec/Makefile
+	make -C $NOrec clean ${MAKE_OPTIONS}
+	make -C $NOrec ${MAKE_OPTIONS}
+	suffix=""
+	if [ $build == 'phasedTM' ]; then
+		local s=$( [ $(uname -m) == 'x86_64' ] && echo 'rtm' || echo 'powerTM' )
+		suffix="_$s-$phasedTMsuffix-norec"
+	else
+		local s=$(uname -m)
+		suffix="_$s"
+	fi
+	echo "## $build ${suffix} compiled"
+	compile_stamp_apps
+	compile_microbench_apps
+}
+
+function compile_with_rtm {
+
+	test -z "$_TSX_LOCKS"       && _TSX_LOCKS='simple_lock'
+	test "$_TSX_LOCKS" == "ALL" && _TSX_LOCKS=$TSX_LOCKS
+				
+	for lock in ${_TSX_LOCKS}; do
+		sed -e "/# DEFINES += -D${lock^^}/s|# ||"  \
+				$HTM/Makefile.template > $HTM/Makefile
+		touch $HTM/Makefile
+		make -C $HTM clean ${MAKE_OPTIONS}
+		make -C $HTM ${MAKE_OPTIONS}
+		
+		suffix=-${lock}
+		echo "## ${build} ${suffix} compiled"
+		
+		compile_stamp_apps
+		compile_microbench_apps
+		rm -f $HTM/Makefile
+	done # FOR EACH LOCK
+
+}
+
+function compile_with_powerTM {
+
+	lock=simple_lock
+	sed -e "/# DEFINES += -D${lock^^}/s|# ||"  \
+			$HTM/Makefile.template > $HTM/Makefile
+	touch $HTM/Makefile
+	make -C $HTM clean ${MAKE_OPTIONS}
+	make -C $HTM ${MAKE_OPTIONS}
+	
+	suffix=-${lock}
+	echo "## powerTM ${suffix} compiled"
+	
+	compile_stamp_apps
+	compile_microbench_apps
+	rm -f $HTM/Makefile
+}
+
+function compile_with_hle {
+	
+	suffix=""
+	echo "## HLE compiled"
+	compile_stamp_apps
+	compile_microbench_apps
+}
+
+function compile_with_lock {
+	
+	suffix=""
+	echo "## LOCK compiled"
+	compile_stamp_apps
+	compile_microbench_apps
+}
+
+function compile_seq {
+	
+	suffix=""
+	echo "## SEQ compiled"
+	compile_stamp_apps
+	compile_microbench_apps
+}
+
+function compile_seq_nvm {
+	
+	
+  cd $MINIMAL_NVM
+	(./compile.sh)>>/dev/null
+	[[ $? != 0 ]] && echo "error: failed to compile minimal_nvm"
+	cd $BASEPATH
+	
+	suffix=""
+  echo "## seq_nvm compiled"
+	compile_stamp_apps
+	compile_microbench_apps
+}
+
+function compile {
+	
+	echo 'starting compilation...'
+
+	if [ $(uname -m) == "x86_64" ];  then
+		make -C $MSRDIR clean $MAKE_OPTIONS && make -C $MSRDIR $MAKE_OPTIONS
+		if [ ! -e $ALLOCSDIR/$(readlink ${hoard}) ]     || \
+		   [ ! -e $ALLOCSDIR/$(readlink ${tcmalloc}) ]  || \
+			 [ ! -e $ALLOCSDIR/$(readlink ${tbbmalloc}) ] || \
+			 [ ! -e $ALLOCSDIR/$(readlink ${ibmptmalloc}) ]; then
+			cd $ALLOCSDIR
+	#		./gen-allocators.sh
+			cd ..
+		fi
+	fi
+
+	test -z "$_BUILDS"                && _BUILDS=$BUILDS
+	test "$_STAMP_APPS" == "ALL"      && _STAMP_APPS=$STAMP_APPS
+	test "$_MICROBENCH_APPS" == "ALL" && _MICROBENCH_APPS=$MICROBENCH_APPS
+
+	for build in $_BUILDS; do
+		case $build in
+			seq)
+				compile_seq
+				;;
+      seq_nvm)
+        compile_seq_nvm
+        ;;
+			tinystm)
+				compile_with_tinystm
+				;;
+			pstm)
+				compile_with_pstm
+				;;
+			pstm_tinystm)
+				compile_with_pstm_tinystm
+				;;
+			pstm_chk)
+				compile_with_pstm_chk
+				;;
+			nvm_rtm)
+				compile_with_nvm_rtm
+				;;
+			nvm_*)
+				compile_with_nvm
+				;;
+			nvphtm)
+				compile_with_nvphtm
+				;;
+			nvphtm_pstm)
+				compile_with_nvphtm_pstm
+				;;
+			nvphtm_pstm_nh)
+				compile_with_nvphtm_pstm_nh
+				;;
+			wlpdstm)
+			  compile_with_wlpdstm
+				;;
+			phasedTM)
+				compile_with_phasedTM
+				;;
+			norec | rh_norec | hyco)
+				compile_with_norec
+				;;
+			hytm_norec_eager)
+				HYTM_LOCK_SUBSCRIPTION="$HYTM_EAGER"
+				compile_with_norec
+				HYTM_LOCK_SUBSCRIPTION=""
+				;;
+			hytm_norec_lazy)
+				HYTM_LOCK_SUBSCRIPTION="$HYTM_LAZY"
+				compile_with_norec
+				HYTM_LOCK_SUBSCRIPTION=""
+				;;
+			rtm)
+				compile_with_rtm
+				;;
+			hle)
+				compile_with_hle
+				;;
+			powerTM)
+				compile_with_powerTM
+				;;
+			lock)
+				compile_with_lock
+				;;
+			\?)
+				echo "error: unkown build '$build'!"
+				exit -1
+				;;
+		esac
+	done
+	
+	echo 'compilation finished.'
+}
+
+while getopts "b:v:S:d:m:D:l:s:i:a:L:P:H:T:hX" opt;
+do
+	case $opt in
+		b) _BUILDS=$OPTARG ;;
+		v) _PHASEDTM_DESIGNS=$OPTARG ;;
+		S) _PHASEDTM_STMS=$OPTARG ;;
+		d) _tinySTM_DESIGNS=$OPTARG ;;
+		m) _tinySTM_CMS=$OPTARG ;;
+		D) _HTM_CMS=$OPTARG ;;
+		l) _TSX_LOCKS=$OPTARG ;;
+		s) _STAMP_APPS=$OPTARG ;;
+		i) _MICROBENCH_APPS=$OPTARG ;;
+		a) _MAX_CAPACITY_ABORTS=$OPTARG ;;
+		L) _LOG_SIZE=$OPTARG ;;
+		P) case $OPTARG in
+				ORT_PROFILING)
+					ORT_PROFILING='# DEFINES += -DORT_PROFILING' ;;
+				TSX_ABORT_PROFILING)
+					MAKE_OPTIONS="$MAKE_OPTIONS PROFILING=TSX_ABORT_PROFILING" ;;
+				COMMIT_RATE_PROFILING)
+				 	COMMIT_RATE_PROFILING='# DEFINES += -DCOMMIT_RATE_PROFILING' 
+				 	MAKE_OPTIONS="$MAKE_OPTIONS PROFILING=COMMIT_RATE_PROFILING" ;;
+				RW_SET_PROFILING)
+					RW_SET_PROFILING='# DEFINES += -DRW_SET_PROFILING' 
+					NO_DUPLICATES_IN_RW_SETS='# DEFINES += -DNO_DUPLICATES_IN_RW_SETS'
+					MAKE_OPTIONS="$MAKE_OPTIONS PROFILING=RW_SET_PROFILING" ;;
+				THROUGHPUT_PROFILING)
+					MAKE_OPTIONS="$MAKE_OPTIONS PROFILING=THROUGHPUT_PROFILING" ;;
+				HTM_STATUS_PROFILING)
+					MAKE_OPTIONS="$MAKE_OPTIONS PROFILING=HTM_STATUS_PROFILING" ;;
+				PHASE_PROFILING)
+					MAKE_OPTIONS="$MAKE_OPTIONS PROFILING2=PHASE_PROFILING" ;;
+				TIME_MODE_PROFILING)
+					MAKE_OPTIONS="$MAKE_OPTIONS PROFILING2=TIME_MODE_PROFILING" ;;
+				STAGNATION_PROFILING)
+					MAKE_OPTIONS="$MAKE_OPTIONS PROFILING3=STAGNATION_PROFILING" ;;
+				 [0-9])
+				 	MAKE_OPTIONS="$MAKE_OPTIONS PROFILING=$OPTARG" ;;
+				 *) echo "error: invalid profiling mode '$OPTARG'" && exit -1 ;;
+				esac ;;
+		H) _ORT_HASHES=$OPTARG ;;
+		T) MAKE_OPTIONS="$MAKE_OPTIONS THRESHOLD=$OPTARG" ;;
+		h) usage && exit -1 ;;
+    X) MAKE_OPTIONS="$MAKE_OPTIONS SPEAR_MOD=yes" ;;
+		\?) echo $0" : error - invalid option -- $OPTARG"
+			exit 1
+	esac
+done
+
+[[ -z "$_STAMP_APPS" && -z "$_MICROBENCH_APPS" ]] \
+	&& echo "error: no app specified to be compiled" && exit -1
+
+compile

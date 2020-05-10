@@ -1,0 +1,17 @@
+# TMBUILD = tinystm
+# ======== Defines ========
+#CC       := gcc
+CPPFLAGS += -DNDEBUG
+CPPFLAGS += -I../common/$(TMBUILD) -DSTM -DTinySTM
+CFLAGS   += -Wall -Wextra
+CFLAGS   += -O3
+
+LD       := $(CC)
+LDFLAGS  += -lpthread
+
+LIBDIR ?= ../../../tinySTM
+CPPFLAGS += -I$(LIBDIR)/include 
+LDFLAGS  += -L$(LIBDIR)/lib -lstm
+TMLIB  += $(LIBDIR)/lib/libstm.a
+
+include ../common/Makefile.common

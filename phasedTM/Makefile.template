@@ -1,0 +1,82 @@
+#!/usr/bin/make
+
+target = libphTM.a
+
+DEFINES = -D_GNU_SOURCE -DNDEBUG -DPHASEDTM
+
+# DEFINES += -DDESIGN=PROTOTYPE
+# DEFINES += -DDESIGN=OPTIMIZED
+
+DEFINES := $(DEFINES:PROTOTYPE=0)
+DEFINES := $(DEFINES:OPTIMIZED=1)
+DEFINES += -DPROTOTYPE=0 -DOPTIMIZED=1
+
+
+
+ifdef MAX_CAPACITY_ABORTS
+  DEFINES += -DMAX_CAPACITY_ABORTS=$(MAX_CAPACITY_ABORTS)
+endif
+
+ifdef PROFILING
+  DEFINES += -D$(PROFILING)
+endif
+
+ifdef PROFILING2
+  DEFINES += -D$(PROFILING2)
+endif
+
+ifdef PROFILING3
+  DEFINES += -D$(PROFILING3)
+endif
+
+ifdef USE_NVM_HEURISTIC
+	DEFINES += -DUSE_NVM_HEURISTIC
+endif
+
+ifdef USE_ABORT_LOG_CHECK
+	DEFINES += -DUSE_ABORT_LOG_CHECK
+endif
+
+ifdef DISABLE_PHASE_TRANSITIONS
+	DEFINES += -DDISABLE_PHASE_TRANSITIONS
+endif
+
+ifdef SOLUTION
+	DEFINES += -DSOLUTION=$(SOLUTION)
+endif
+
+ifdef DO_CHECKPOINT
+	DEFINES += -DDO_CHECKPOINT=${DO_CHECKPOINT}
+endif
+
+ifdef LOG_SIZE
+	DEFINES += -DLOG_SIZE=${LOG_SIZE}
+endif
+
+CFLAGS = -O3 -std=c11 -Wall -I. -I../htm -I../NOrec/include -I../nvhtm/nh/nvhtm_common -I../nvhtm/nh/common -I../nvhtm/arch_dep/include -I ../nvhtm/minimal_nvm/include -I/opt/pmdk/include -I../nvhtm/htm_alg/include  -I../nvhtm/nh/nvhtm_pc
+
+CPPFLAGS = $(DEFINES)
+#CFLAGS = -O3 -std=c11 -Wall -I. -I../htm -I../NOrec/include
+
+ARCH = $(shell uname -m)
+
+ifeq ($(ARCH), x86_64)
+  # Intel RTM
+  CFLAGS += -mrtm
+else
+  ifeq ($(ARCH), ppc64le)
+    # IBM PowerTM
+    CFLAGS += -mhtm
+  else
+	  $(error unsupported architecture)
+  endif
+endif
+
+all: $(target)
+
+$(target): phTM.o
+	$(AR) cr $@ $^
+
+
+clean:
+	$(RM) *.a *.o

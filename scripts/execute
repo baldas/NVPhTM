@@ -1,0 +1,339 @@
+#!/bin/bash
+
+source $PWD/scripts/scripts.cfg
+[ $? != 0 ] && echo -e "\nerror: running scripts from wrong directory!" && exit -1
+
+function usage {
+	
+	echo $0' <flags bellow>'
+
+	echo
+	echo '-d <tinySTM DESIGN>'
+	echo "${tinySTM_DESIGNS// / | }"
+	echo 'default = ETL'
+
+	echo
+	echo '-m <tinySTM CM>'
+	echo "${tinySTM_CMS// / | }"
+	echo 'default = SUICIDE'
+	
+	echo
+	echo '-H <ORT hash>'
+	echo "${ORT_HASHES// / | }"
+	echo 'default = ORIGINAL'
+	
+	echo
+	echo '-l <TSX lock>'
+	echo "${TSX_LOCKS// / | }"
+	echo 'default = simple_lock'
+	
+	echo
+	echo '-i <intset app>'
+	echo "${INTSET_APPS// / | }"
+	echo 'default = NONE'
+	
+	echo
+	echo '-z <initial intset size>'
+	echo "${INITSIZES// / | }"
+	echo 'default = ALL'
+	
+	echo
+	echo '-u <intset update rate>'
+	echo "${UPDATERATES// / | }"
+	echo 'default = ALL'
+
+	echo
+	echo '-a <stamp app>'
+	echo "${STAMP_APPS// / | }"
+	echo 'default = NONE'
+	
+	echo
+	echo '-w <app working-set size>'
+	echo "${WORK_SIZES// / | }"
+	echo 'default = large'
+
+	echo
+	echo '-b <build>'
+	echo "${BUILDS// / | }"
+	echo 'default = ALL'
+	
+	echo
+	echo '-M <memalloc>'
+	echo "${MEMALLOCS// / | }"
+	echo 'default = ptmalloc'
+
+	echo
+	echo '-t <n. threads>'
+	echo '1 | 2 | 4 | etc... | "1 2 4 8" | "4 8 16" | etc...'
+	echo 'default = "1 2 3 4"'
+
+	echo
+	echo '-n <n. executions>'
+	echo 'default = 20'
+}
+
+function execute_stamp_apps {
+	
+	test "$_STAMP_APPS" == "ALL"  && local _STAMP_APPS=$STAMP_APPS
+	test -z "$_WORK_SIZES"        && local _WORK_SIZES='large'
+	test "$_WORK_SIZES" == "ALL"  && local _WORK_SIZES=$WORK_SIZES
+
+
+
+  LOG_FILE="${RESULTDIR}/${DATESTR}-${HASH}.log"
+  HOST=`hostname`
+  DATE=`date`
+  echo "Execution on $HOST at $DATE -- build $build" >> ${LOG_FILE}
+  echo "=======================================" >> ${LOG_FILE}
+ 
+  cp ns_per_10_nops "$RESULTDIR/"
+
+  export STM_CONFIG=${!build}
+
+	for app in ${_STAMP_APPS}; do
+		for work in ${_WORK_SIZES}; do
+			eval exec_flags=\$EXEC_FLAG_${app}_$work
+			appRunPath="$STAMP/$build/$app/$app-$suffix"
+			for t in $NUMTHREADS; do
+				local s=$(echo $suffix | sed 's|seq|seq-'$(uname -m)'|')
+				local prefix="$LOGDIR/$app-$s-$memalloc-$t"
+				local outputLog="${prefix}.log"
+				local thrputLog="${prefix}.throughput"
+				local stagLog="${prefix}.stag"
+				rm -f $outputLog $thrputLog
+				rm -f $outputLog
+        rm -f $stagLog
+				ipcrm -a
+				for j in $(seq 1 ${_NEXEC}); do
+					echo "execution $j: $(basename $appRunPath) ${exec_flags}$t ($memalloc) ($work)" 2>&1 | tee -a ${LOG_FILE}
+#					LD_LIBRARY_PATH=/opt/pmdk/lib \
+            export LD_PRELOAD=./allocators/libibmmalloc.so:./allocators/libtcmalloc_minimal.so
+						until (timeout 300 ${appRunPath} ${exec_flags}$t 2>> $outputLog >> $outputLog);
+            do
+	            [[ $? == 124 ]] && echo "timout!" 2>&1 | tee -a ${LOG_FILE}
+              export LD_PRELOAD=
+              ps -ef | grep $(basename $appRunPath) | grep -v grep | awk '{print $2}' | xargs kill
+              echo 'Retrying again...' 2>&1 | tee -a ${LOG_FILE}
+					    echo "execution $j: $(basename $appRunPath) ${exec_flags}$t ($memalloc) ($work)" 2>&1 | tee -a ${LOG_FILE}
+              ipcrm -a
+              export LD_PRELOAD=./allocators/libibmmalloc.so:./allocators/libtcmalloc_minimal.so
+            done;
+            export LD_PRELOAD=
+
+					local thputfile="transactions.throughput"
+					local separator="---"
+					[ -e $thputfile ] && cat $thputfile >> $thrputLog && \
+						echo "$separator" >> $thrputLog && rm -f $thputfile
+
+					local stagfile="stagnation.dat"
+					[ -e $stagfile ] && cat $stagfile >> $stagLog && \
+						echo "$separator" >> $stagLog && rm -f $stagfile
+				done # FOR EACH EXECUTION
+			done # FOR EACH NUMBER OF THREADS
+		done # FOR EACH WORK SIZE
+	done # FOR EACH APPS
+  
+  # clean?
+  #export LD_PRELOAD=
+  #export STM_CONFIG=
+  
+  DATE=`date`
+  echo "=======================================" >> ${LOG_FILE}
+  echo "Execution finished on $HOST at $DATE -- build $build" >> ${LOG_FILE}
+
+  # generate a tgz file with the results
+  lastdir="${RESULTDIR##*/}"
+  tar zcvf "${lastdir}.tgz" "${RESULTDIR##*/}/"
+
+}
+
+function execute_microbench_apps {
+	
+	test "$_MICROBENCH_APPS" == "ALL" && local _MICROBENCH_APPS=$MICROBENCH_APPS
+	test -z "$_INITSIZES"             && local _INITSIZES=$INITSIZES
+	test -z "$_UPDATERATES"           && local _UPDATERATES=$UPDATERATES
+	test -z "$_PHASECONFIGS"          && local _PHASECONFIGS=$PHASECONFIGS
+	test -z "$_NBTREES"               && local _NBTREES=$NBTREES
+
+	local i="$(sed 's|\([0-9]\+\)|i\1|g' <<<${_INITSIZES})"
+	local u="$(sed 's|\([0-9]\+\)|u\1|g' <<<${_UPDATERATES})"
+	local n="$(sed 's|\([0-9]\+\)|n\1|g' <<<${NUMTHREADS})"
+
+	local t="$(sed 's|\([0-9]\+\)|t\1|g' <<<${_NBTREES})"
+
+	local p="$(sed 's|\([A-Z]\+:[0-9]\+:[0-9]\+\)|p\1|g' <<<${_PHASECONFIGS})"
+
+	for app in ${_MICROBENCH_APPS}; do
+		appRunPath="$MICROBENCH/$build/$app-$suffix"
+		case $app in
+			intset_*)
+				local EXEC_FLAGS="$(cross_product "$i" "$u" "$n")" ;;
+			pintset)
+				local EXEC_FLAGS="$(cross_product "$p" "$n")" ;;
+			hintset)
+				local EXEC_FLAGS="$(cross_product "$i" "$u" "$t" "$n")" ;;
+			conflict | capacity)
+				local EXEC_FLAGS="$(cross_product "$u" "$n")" ;;
+			phased)
+				local EXEC_FLAGS="$(cross_product "$n")" ;;
+		esac
+		local s=$(echo $suffix | sed 's|seq|seq-'$(uname -m)'|')
+		for exec_flags in ${EXEC_FLAGS}; do
+			local prefix="$LOGDIR/$app-$s-$memalloc-${exec_flags}"
+			local outputLog="${prefix}.log"
+			local phasedLog="${prefix}.transitions"
+			local thrputLog="${prefix}.throughput"
+			rm -f $outputLog $phasedLog $thrputLog
+			for j in $(seq 1 ${_NEXEC}); do
+				echo "execution $j: $(basename $appRunPath) -${exec_flags//-/ -} ($memalloc)"	
+				LD_PRELOAD=${!memalloc} STM_CONFIG=${!build} ${appRunPath} -${exec_flags//-/ -}  >> $outputLog
+				local transfile="transitions.timestamp"
+				local thputfile="transactions.throughput"
+				local separator="---"
+				[ -e $transfile ] && cat $transfile >> $phasedLog && \
+					echo "$separator" >> $phasedLog && rm -f $transfile
+				[ -e $thputfile ] && cat $thputfile >> $thrputLog && \
+					echo "$separator" >> $thrputLog && rm -f $thputfile
+			done # FOR EACH EXECUTION
+		done # FOR EACH EXEC FLAGS
+	done # FOR EACH APPS
+}
+
+function execute {
+
+	test -e $LOGDIR || mkdir -p $LOGDIR
+
+	############################ GLOBAL ##################################
+	test -z "$_BUILDS"                && _BUILDS=$BUILDS
+	test -z "$_NEXEC"                 && _NEXEC=$NEXEC
+	test -z "$_NTHREADS"              && _NTHREADS=$NTHREADS
+	test -z "$_MEMALLOCS"             && _MEMALLOCS='ptmalloc'
+	test "$_MEMALLOCS" == "ALL"       && _MEMALLOCS=$MEMALLOCS
+	############################# STM ####################################
+	test -z "$_tinySTM_DESIGNS"       && _tinySTM_DESIGNS='ETL'
+	test "$_tinySTM_DESIGNS" == "ALL" && _tinySTM_DESIGNS=$tinySTM_DESIGNS
+	test -z "$_tinySTM_CMS"           && _tinySTM_CMS='SUICIDE'
+	test "$_tinySTM_CMS" == "ALL"     && _tinySTM_CMS=$tinySTM_CMS
+	test -z "$_ORT_HASHES"            && _ORT_HASHES='ORIGINAL'
+	test "$_ORT_HASHES" == "ALL"      && _ORT_HASHES=$ORT_HASHES
+	############################# HTM ####################################
+	test -z "$_TSX_LOCKS"             && _TSX_LOCKS='simple_lock'
+	test "$_TSX_LOCKS" == "ALL"       && _TSX_LOCKS=$TSX_LOCKS
+	########################### phasedTM #################################
+	test -z "$_PHASEDTM_STMS"          && _PHASEDTM_STMS='norec'
+	test "$_PHASEDTM_STMS" == "ALL"    && _PHASEDTM_STMS=$PHASEDTM_STMS
+	test -z "$_PHASEDTM_DESIGNS"       && _PHASEDTM_DESIGNS='OPTIMIZED'
+	test "$_PHASEDTM_DESIGNS" == "ALL" && _PHASEDTM_DESIGNS=$PHASEDTM_DESIGNS
+
+	
+	echo 'starting execution...'
+
+	for build in $_BUILDS; do
+		case $build in
+			tinystm)
+				local s=$(uname -m)
+				SUFFIXES="$(cross_product ${build}_$s "${_tinySTM_DESIGNS}" "${_tinySTM_CMS}" "${_ORT_HASHES}")"
+				;;
+			phasedTM)
+				SUFFIXES=""
+				local s=$( [ $(uname -m) == 'x86_64' ] && echo 'rtm' || echo 'powerTM' )
+				local b="$(cross_product ${build}_$s "${_PHASEDTM_DESIGNS}")"
+				for stm in ${_PHASEDTM_STMS}; do
+					case $stm in
+						tinystm)
+							local tmp="$(cross_product "${_tinySTM_DESIGNS}" "${_tinySTM_CMS}" "${_ORT_HASHES}")"
+							SUFFIXES="$SUFFIXES $(cross_product "$b" "$tmp")"
+							;;
+						norec)
+							local tmp="norec"
+							SUFFIXES="$SUFFIXES $(cross_product "$b" "$tmp")"
+							;;
+					esac
+				done
+				SUFFIXES=$(sed 's|^[ ]\+||' <<<$SUFFIXES)
+				;;
+			rtm)
+				SUFFIXES="$(cross_product $build "${_TSX_LOCKS}")"
+				;;
+			powerTM)
+				SUFFIXES="$(cross_product $build "simple_lock")"
+				;;
+			norec | rh_norec | hytm_norec_eager | hytm_norec_lazy | hyco)
+				SUFFIXES="${build}_$(uname -m)"
+				;;
+			nvphtm)
+				SUFFIXES="${build}_$(uname -m)"
+				;;
+			nvphtm_pstm)
+				SUFFIXES="${build}_$(uname -m)"
+				;;
+			nvphtm_pstm_nh)
+				SUFFIXES="${build}_$(uname -m)"
+				;;
+			pstm)
+				SUFFIXES="${build}_$(uname -m)"
+				;;
+			pstm_chk)
+				SUFFIXES="${build}_$(uname -m)"
+				;;
+			pstm_tinystm)
+				local s=$(uname -m)
+				SUFFIXES="$(cross_product ${build}_$s "${_tinySTM_DESIGNS}" "${_tinySTM_CMS}" "${_ORT_HASHES}")"
+				;;
+			nvm_rtm)
+				SUFFIXES="$(cross_product $build "${_TSX_LOCKS}")"
+				;;
+			*)
+				SUFFIXES=$build
+				;;
+		esac
+		NUMTHREADS=$_NTHREADS
+		[ $build == "seq" ] && NUMTHREADS='1'
+		for suffix in $SUFFIXES; do
+			for memalloc in $_MEMALLOCS; do
+				execute_stamp_apps
+				execute_microbench_apps
+			done # FOR EACH MEMORY ALLOCATOR
+		done # FOR EACH SUFFIX
+	done # FOR EACH BUILD
+
+	echo 'execution finished.'
+}
+
+while getopts "b:v:S:d:m:l:s:w:i:z:u:t:f:T:n:a:M:H:h" opt;
+do
+	case $opt in
+		b) _BUILDS=$OPTARG ;;
+		v) _PHASEDTM_DESIGNS=$OPTARG ;;
+		S) _PHASEDTM_STMS=$OPTARG ;;
+		d) _tinySTM_DESIGNS=$OPTARG ;;
+		m) _tinySTM_CMS=$OPTARG ;;
+		l) _TSX_LOCKS=$OPTARG ;;
+		s) _STAMP_APPS=$OPTARG ;;
+		w) _WORK_SIZES=$OPTARG ;;
+		i) _MICROBENCH_APPS=$OPTARG ;;
+		z) _INITSIZES=$OPTARG ;;
+		u) _UPDATERATES=$OPTARG ;;
+		t) _NTHREADS=$OPTARG ;;
+		f) _PHASECONFIGS=$OPTARG ;;
+		T) _NBTREES=$OPTARG ;;
+		n) _NEXEC=$OPTARG ;;
+		a) _MAX_CAPACITY_ABORTS=$OPTARG ;;
+		M) _MEMALLOCS=$OPTARG ;;
+		H) _ORT_HASHES=$OPTARG ;;
+		h) usage && exit -1 ;;
+		\?) echo $0" : error - invalid option -- $OPTARG"
+			exit 1
+	esac
+done
+
+[[ -z "$_STAMP_APPS" && -z "$_MICROBENCH_APPS" ]] \
+	&& echo "error: no app specified to be executed" && exit -1
+
+DATESTR=`date +%Y%m%d-%H%M%S`
+GITHASH=`git rev-parse HEAD`
+HASH=`echo ${GITHASH} | cut -c1-10`
+RESULTDIR="$BASEPATH/results-${DATESTR}-${HASH}"
+LOGDIR="$RESULTDIR/logs"     # raw output files
+
+execute

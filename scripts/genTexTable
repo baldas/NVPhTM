@@ -1,0 +1,222 @@
+#!/bin/bash
+
+source $PWD/scripts/scripts.cfg
+[ $? != 0 ] && echo -e "\nerror: running scripts from wrong directory!" && exit -1
+
+function usage {
+	
+	echo $0' -T <table type> [-d <tinySTM DESIGN>]  [-m <tinySTM CM>] [-a <stamp app>] [-D <RTM CM>]'
+	echo -e '\t[-l <TSX lock>] [-t <n. threads>] [-b <build>] [-M <memalloc>] [-g <governor>]'
+
+	echo
+	echo '-T <table type>'
+	echo 'report | summary | abort'
+	echo 'default = summary'
+
+	echo
+	echo '-d <tinySTM DESIGN>'
+	echo 'ETL | CTL | WT'
+	echo 'default = ALL'
+
+	echo
+	echo '-m <tinySTM CM>'
+	echo 'SUICIDE | BACKOFF | DELAY'
+	echo 'default = ALL'
+	
+	echo
+	echo '-D <RTM CM>'
+	echo 'glock | auxlock | backoff | diegues'
+	echo 'default = ALL'
+	
+	echo
+	echo '-l <TSX lock>'
+	echo 'simple_lock | hle_lock'
+	echo 'default = ALL'
+
+	echo
+	echo '-a <stamp app>'
+	echo 'bayes | genome | intruder | kmeans | labyrinth | ssca2 | vacation | yada'
+	echo 'default = ALL'
+
+	echo
+	echo '-b <build>'
+	echo 'tinystm | seq | lock | hle | rtm'
+	echo 'default = ALL'
+	
+	echo
+	echo '-M <memalloc>'
+	echo 'ptmalloc | tcmalloc | hoard | tbbmalloc'
+	echo 'default = ptmalloc'
+	
+	echo
+	echo '-g <governor>'
+	echo 'powersave | conservative | ondemand | userspace | performance'
+	echo 'default = ondemand'
+
+	echo
+	echo '-t <n. threads>'
+	echo '1 | 2 | 4 | etc... | "1 2 4 8" | "4 8 16" | etc...'
+	echo 'default = "1 2 3 4"'
+}
+
+tableScript='
+BEGIN{ FS="|"; nr=0; colsep="&"}
+{
+	if( $1 ~ "Tx #"){
+		ncols=NF
+		i=1
+		nr++
+		nt=0;
+		sub("#","\\#",$1)
+		data[1,1] = $1
+		for(j=2; j < NF; j++){
+			data[i,j] = colsep$j
+		}
+	} else if( $1 ~ "Thread" ){
+		if(tabtype == 2) { i=1 }
+		nt++
+	} else if( $1 ~ "Tx") {
+		i++
+		data[i,1] = $1
+		for(j=2; j < NF; j++){
+			gsub(/,/,"",$j)
+			sub(/-nan/,"0.0",$j)
+			match($j, /([0-9]+)/, a1)
+			m = match($j, /\([ ]*([0-9.]+)\)/, b1)
+			match(data[i,j], /([0-9]+)/, a2)
+			match(data[i,j], /\([ ]*([0-9.]+)\)/, b2)
+			a=a1[1] + a2[1]
+			b=b1[1] + b2[1]
+			if (m) data[i,j] = sprintf("%lu (%lf)",a,b)
+			else data[i,j] = sprintf("%lu",a)
+		}
+	}
+}
+END{
+	nlines=i
+	if(tabtype == 2) nr = nr * nt
+	#if(tabtype == 1) factor = (nlines-1)/nt
+	factor = (nlines-1)/nt
+	for(i=1; i <= nlines; i++){
+		if(tabtype == 1)
+			if( (i-2) % factor == 0 )
+				printf("  \\multicolumn{%d}{c}{Thread %d} \\\\ \\hline\n",ncols-1,(i-2)/factor)
+		for(j=1; j < ncols; j++){
+			if(i == 1) {
+				printf("  %s%s",data[i,j], j == ncols-1 ? "\\\\" : ""); continue
+			}
+			if(j == 1) { printf("  %s",data[i,j]); continue}
+			match(data[i,j], /([0-9]+)/, aa)
+			m = match(data[i,j], /\([ ]*([0-9.]+)\)/, bb)
+			if(m) printf("%s %'\''10.2lf (%6.2lf) ",colsep,aa[1]/nr, bb[1]/nr);
+			else printf("%s %'\''10.2lf ", colsep , aa[1]/nr);
+		}
+		printf(" %s\n", i != 1 ? "\\\\" : "");
+		if((i-1) % factor == 0) printf("  \\hline\n")
+	}
+}'
+
+function generateTable {
+
+_file=$1
+_app=$2
+_build=$3
+_nthreads=$4
+_tabtype=$5
+
+echo '\documentclass[12pt]{standalone}'
+echo '\usepackage[table]{xcolor}'
+echo '\begin{document}'
+echo '\rowcolors{1}{gray!35}{white}'
+
+_n=$(grep -n 'Tx #' $_file | awk -F'|' 'END{print NF}')
+[ "$_tabtype" != "abort" ] && _n=$((_n-1))
+echo '\begin{tabular}{|l|'$(echo "print ($_n-1)*'r|'" | python)'} \hline'
+_build=$(sed 's/_/ /g;s/-/ /g' <<< $_build)
+echo "\multicolumn{${_n}}{|c|}{${_app^} -- $_build -- $_nthreads thread(s)}\\\\ \hline"
+
+_time=$(grep -e '^Time[ ]\+=' $_file | awk '{sum+=$3}END{print "Time =",sum/NR}')
+_energy=$(grep -e '^Energy[ ]\+=' $_file | awk '{sum+=$3}END{print "Energy ="sum/NR}')
+echo "\multicolumn{${_n}}{|c|}{$_time s -- $_energy J}\\\\ \hline"
+
+case $_tabtype in
+	report)
+		cat $_file | awk -v tabtype=1 "$tableScript"
+		;;
+	summary)
+		cat $_file | awk -v tabtype=2 "$tableScript"
+		;;
+	abort)
+		cat $_file | awk -v tabtype=2 "$tableScript"
+		;;
+esac
+
+echo '\end{tabular}'
+echo '\end{document}'
+}
+
+function generate {
+	
+	[ -e $DATADIR ] || mkdir $DATADIR
+	[ -e $TABDIR ] || mkdir $TABDIR
+	
+	test -z "$_BUILDS"           && _BUILDS=$BUILDS
+	test -z "$_NTHREADS"         && _NTHREADS=$NTHREADS
+	test -z "$_MEMALLOCS"        && _MEMALLOCS='ptmalloc'
+	test "$_MEMALLOCS" == "ALL"  && _MEMALLOCS=$MEMALLOCS
+	test -z "$_GOVERNORS"        && _GOVERNORS='ondemand'
+	test "$_GOVERNORS" == "ALL"  && _GOVERNORS=$GOVERNORS
+	test -z "$_tinySTM_DESIGNS"  && _tinySTM_DESIGNS=$tinySTM_DESIGNS
+	test -z "$_tinySTM_CMS"      && _tinySTM_CMS=$tinySTM_CMS
+	test -z "$_STAMP_APPS"       && _STAMP_APPS=$STAMP_APPS
+	test -z "$_rtm_CMS"          && _rtm_CMS=$rtm_CMS
+	test -z "$_tsx_LOCKS"        && _tsx_LOCKS=$tsx_LOCKS
+	test -z "$_TABTYPE"          && _TABTYPE='summary'
+
+	for app in ${_STAMP_APPS}; do
+		for build in $_BUILDS; do
+			SUFFIXES=$build
+			test $build == 'tinystm' && \
+				SUFFIXES="$(eval echo -n $build-{${_tinySTM_DESIGNS// /,}}-{${_tinySTM_CMS// /,}} | sed 's|{||g;s|}||g')"
+			test $build == 'rtm' && \
+				SUFFIXES="$(eval echo -n $build-{${_rtm_CMS// /,}}-{${_tsx_LOCKS// /,}} | sed 's|{||g;s|}||g')"
+			SUFFIXES="$(eval echo -n {${SUFFIXES// /,}}-{${_GOVERNORS// /,}} | sed 's|{||g;s|}||g')"
+			for suffix in $SUFFIXES; do
+				for memalloc in $_MEMALLOCS; do
+					for t in $_NTHREADS; do
+						for tabtype in ${_TABTYPE}; do
+							logfile="$LOGDIR/$app-$suffix-$memalloc-$t.log"
+							texfile="$DATADIR/$app-$suffix-$memalloc-$tabtype-$t.tex"
+							generateTable $logfile $app $suffix $t $tabtype > $texfile
+							echo "generating: $texfile -> pdf"
+							pdflatex -halt-on-error -output-directory $TABDIR $texfile > /dev/null
+							rm $TABDIR/*.{aux,log}
+						done # FOR EACHO TABTYPE
+					done # FOR EACH NUMBER OF THREADS
+				done # FOR EACH MEMORY ALLOCATOR
+			done # FOR EACH SUFFIX
+		done # FOR EACH BUILD
+	done # FOR EACH APPS
+}
+
+while getopts "b:d:m:D:l:a:t:g:M:hT:" opt;
+do
+	case $opt in
+		b) _BUILDS=$OPTARG ;;
+		d) _tinySTM_DESIGNS=$OPTARG ;;
+		m) _tinySTM_CMS=$OPTARG ;;
+		D) _rtm_CMS=$OPTARG ;;
+		l) _tsx_LOCKS=$OPTARG ;;
+		a) _STAMP_APPS=$OPTARG ;;
+		t) _NTHREADS=$OPTARG ;;
+		g) _GOVERNORS=$OPTARG ;;
+		M) _MEMALLOCS=$OPTARG ;;
+		h) usage && exit -1 ;;
+		T) _TABTYPE=$OPTARG ;;
+		\?) echo $0" : error - invalid option -- $OPTARG"
+			exit 1
+	esac
+done
+
+[ -z "$_TABTYPE" ] && usage && exit -1
+generate

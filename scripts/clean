@@ -1,0 +1,86 @@
+#!/bin/bash
+
+source $PWD/scripts/scripts.cfg
+[ $? != 0 ] && echo -e "\nerror: running scripts from wrong directory!" && exit -1
+
+function usage {
+	
+	echo $0' [-b <build>]'
+
+	echo
+	echo '-b <build>'
+	echo 'tinystm | seq | lock | hle | rtm | norec'
+	echo 'default = ALL'
+}
+
+function clean {
+	
+	echo 'starting cleanup...'
+	
+	make $MAKE_OPTIONS -C $MSRDIR clean
+
+	test -z "$_BUILDS" && _BUILDS=$BUILDS
+
+	for build in ${_BUILDS}; do
+		case $build in
+			seq) ;;
+			tinystm)
+				test -e $tinySTM/Makefile && rm $tinySTM/Makefile
+				make $MAKE_OPTIONS -C $tinySTM/ -f Makefile.template clean
+				;;
+			wlpdstm)
+				make $MAKE_OPTIONS -C $WLPDSTM clean
+				;;
+			phasedTM)
+				test -e $tinySTM/Makefile && rm $tinySTM/Makefile
+				make $MAKE_OPTIONS -C $tinySTM/ -f Makefile.template clean
+				test -e $NOrec/Makefile && rm $NOrec/Makefile
+				make $MAKE_OPTIONS -C $NOrec -f Makefile.template clean
+				test -e $PhasedTM/Makefile && rm $PhasedTM/Makefile
+				make $MAKE_OPTIONS -C $PhasedTM/ -f Makefile.template clean
+				;;
+			rtm | powerTM)
+				test -e $HTM/Makefile && rm $HTM/Makefile
+				make $MAKE_OPTIONS -C $HTM -f Makefile.template clean
+				;;
+			norec)
+				test -e $NOrec/Makefile && rm $NOrec/Makefile
+				make $MAKE_OPTIONS -C $NOrec -f Makefile.template clean
+				;;
+			rh_norec)
+				test -e $NOrec/Makefile && rm $NOrec/Makefile
+				make $MAKE_OPTIONS -C $NOrec -f Makefile.template clean
+				;;
+			nvm_nvhtm*)
+				rm -rf $MINIMAL_NVM/bin/*
+				rm -rf $MINIMAL_NVM/build
+				rm -rf $NVM_HTM_ALG/build
+				rm -rf $NVM_HTM_ALG/bin/*
+				make $MAKE_OPTIONS -C $NVM clean
+				;;
+			hle) ;;
+			lock) ;;
+			\?) echo $0" : error - unknown build '$build'"
+				exit 1
+		esac
+		echo -n "cleaning STAMP apps ($build)..."
+		rm -rf $STAMP/$build
+		echo "done."
+		echo -n "cleaning MICROBENCH apps ($build)..."
+		rm -rf $MICROBENCH/$build
+		echo "done."
+	done
+
+	echo 'cleanup finished.'
+}
+
+while getopts "b:" opt;
+do
+	case $opt in
+		b) _BUILDS=$OPTARG ;;
+		\?) echo $0" : error - invalid option -- $OPTARG"
+			exit 1
+	esac
+done
+
+clean

@@ -1,0 +1,21 @@
+# TMBUILD = tinystm
+# ======== Defines ========
+#CC       := gcc
+ARCH_DEP_PATH = ../../../nvhtm/arch_dep
+LIB_MIN_NVM_PATH = ../../../nvhtm/minimal_nvm
+
+CPPFLAGS += -DNDEBUG
+CPPFLAGS += -I../common/$(TMBUILD) -DSTM -DTinySTM
+CPPFLAGS += -I$(LIB_MIN_NVM_PATH)/include -I$(ARCH_DEP_PATH)/include
+CFLAGS   += -Wall -Wextra
+CFLAGS   += -g -O0 -mrtm
+
+LD       := $(CXX)
+LDFLAGS  += -lpthread
+
+LIBDIR ?= ../../../tinySTM
+CPPFLAGS += -I$(LIBDIR)/include 
+LDFLAGS  += -L$(LIBDIR)/lib -lstm -L$(LIB_MIN_NVM_PATH)/bin -lminimal_nvm
+TMLIB  += $(LIBDIR)/lib/libstm.a $(LIB_MIN_NVM_PATH)/bin/libminimal_nvm.a
+
+include ../common/Makefile.common

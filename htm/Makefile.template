@@ -1,0 +1,64 @@
+#!/usr/bin/make
+
+target = libhtm.a
+
+DEFINES = -D_GNU_SOURCE
+
+ifdef THRESHOLD
+  DEFINES += -DRTM_MAX_RETRIES=$(THRESHOLD)
+endif
+
+ifdef PROFILING
+  DEFINES += -D$(PROFILING)
+endif
+
+ifdef PROFILING2
+  DEFINES += -D$(PROFILING2)
+endif
+
+# DEFINES += -DSIMPLE_LOCK
+
+# DEFINES += -DHLE_LOCK
+
+ifdef USE_ABORT_LOG_CHECK
+	DEFINES += -DUSE_ABORT_LOG_CHECK
+endif
+
+ifdef SOLUTION
+	DEFINES += -DSOLUTION=$(SOLUTION)
+endif
+
+ifdef DO_CHECKPOINT
+	DEFINES += -DDO_CHECKPOINT=${DO_CHECKPOINT}
+endif
+
+ifdef LOG_SIZE
+	DEFINES += -DLOG_SIZE=${LOG_SIZE}
+endif
+
+CFLAGS = -O3 -Wall -I. -I../nvhtm/nh/nvhtm_common -I../nvhtm/nh/common -I../nvhtm/arch_dep/include -I ../nvhtm/minimal_nvm/include -I/opt/pmdk/include -I../nvhtm/htm_alg/include  -I../nvhtm/nh/nvhtm_pc $(DEFINES)
+
+ARCH = $(shell uname -m)
+
+ifeq ($(ARCH), x86_64)
+  # Intel RTM
+  CFLAGS += -mrtm
+else
+  ifeq ($(ARCH), ppc64le)
+    # IBM PowerTM
+    CFLAGS += -mhtm
+  else
+	  $(error unsupported architecture)
+  endif
+endif
+
+all: $(target)
+
+$(target): htm.o
+	$(AR) cr $@ $<
+
+htm.o: htm.c
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+clean:
+	$(RM) *.a *.o

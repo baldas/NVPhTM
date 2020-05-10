@@ -1,0 +1,14 @@
+# TMBUILD = seq
+# ======== Defines ========
+#CC       := gcc
+CPPFLAGS += -DNDEBUG
+CPPFLAGS += -I../common/$(TMBUILD)
+CFLAGS   += -Wall -Wextra
+CFLAGS   += -O3
+
+LD       := $(CC)
+LDFLAGS  += -lpthread
+
+TMLIB    = 
+
+include ../common/Makefile.common

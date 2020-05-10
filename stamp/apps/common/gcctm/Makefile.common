@@ -1,0 +1,17 @@
+# GCC with transactional memory
+# TMBUILD ?= gcctm
+
+# ======== Defines ========
+CC       := gcc-4.8.3
+#CPPFLAGS += -DNDEBUG
+CPPFLAGS += -I../lib -I../common/$(TMBUILD) -I../../../libitm
+CFLAGS   += -Wall -Wextra
+CFLAGS   += -fgnu-tm
+CFLAGS   += -O3
+
+LD       := gcc-4.8.3
+LDFLAGS  += -lpthread
+LDFLAGS  += -L../../../libitm -litm
+LIBDEPS  += 
+
+include ../common/Makefile.common

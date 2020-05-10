@@ -1,0 +1,13 @@
+#tell git to ignore .a and .o files
+*.[ao]
+results
+*.tgz
+*.tbz2
+.tags/*
+
+/stamp/*
+!/stamp/apps
+!/stamp/data
+
+/microbench/*
+!/microbench/apps

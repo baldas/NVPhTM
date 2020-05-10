@@ -1,0 +1,64 @@
+#!/usr/bin/make
+
+TARGET = libnorec.a
+
+ARCH = $(shell uname -m)
+
+SRCS = algs.cpp \
+			 cbr.cpp \
+			 hytm-norec.cpp \
+			 hybrid-cohorts.cpp \
+			 inst.cpp \
+			 irrevocability.cpp \
+			 policies.cpp \
+			 profiling.cpp \
+			 static.cpp \
+			 txthread.cpp \
+			 types.cpp \
+			 WBMMPolicy.cpp \
+			 serial.cpp \
+			 cgl.cpp \
+			 rh-norec.cpp \
+			 norec.cpp
+
+OBJS = $(SRCS:.cpp=.o)
+
+ifeq ($(PERSISTENT_TM), 1)
+  CPPFLAGS = -I./include -D_GNU_SOURCE -DPERSISTENT_TM -I../htm -I../nvhtm/minimal_nvm/include -I../nvhtm/arch_dep/include
+else
+  CPPFLAGS = -I./include -D_GNU_SOURCE -I../htm
+endif
+CXXFLAGS = -O3 -Wall -std=c++11
+
+# DUMMY COMMENT
+# DEFINES += -DCOMMIT_RATE_PROFILING
+# DEFINES += -DRW_SET_PROFILING
+
+# DEFINES += -DHYTM_EAGER
+# DEFINES += -DHYTM_LAZY
+
+CPPFLAGS += $(DEFINES)
+
+ifdef PROFILING3
+  DEFINES += -D$(PROFILING3)
+endif
+
+ifeq ($(ARCH), x86_64)
+  # Intel RTM
+  CXXFLAGS += -mrtm
+else
+  ifeq ($(ARCH), ppc64le)
+    # IBM PowerTM
+    CXXFLAGS += -mhtm -mtune=power8
+  else
+	  $(error unsupported architecture)
+  endif
+endif
+
+$(TARGET):	$(OBJS)
+	$(AR) cr $@ $^
+	ranlib $@
+
+
+clean:
+	$(RM) *.o *.a

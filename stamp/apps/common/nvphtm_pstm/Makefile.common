@@ -1,0 +1,133 @@
+# TMBUILD = nvphtm
+# ======== Defines ========
+CC       := $(CXX)
+CPPFLAGS += -DNDEBUG
+CPPFLAGS += -I../lib -I../common/$(TMBUILD) -DHW_SW_PATHS
+CFLAGS   += -Wall -Wextra
+CFLAGS   += -g -O1
+
+LD       := $(CXX)
+LDFLAGS  += -lpthread -lrt
+
+LIB_PMEM_PATH=/opt/pmdk
+NVM_HTM = ../../../nvhtm/nh
+HTM_ALG_DEP_PATH= ../../../nvhtm/htm_alg
+ARCH_DEP_PATH = ../../../nvhtm/arch_dep
+LIB_MIN_NVM_PATH = ../../../nvhtm/minimal_nvm
+
+CPU_MAX_FREQ=$(shell cat /sys/devices/system/cpu/cpu0/cpufreq/cpuinfo_max_freq)
+MAX_PHYS_THRS=$(shell cat /proc/cpuinfo | grep processor | wc -l)
+CPPFLAGS += -DCPU_MAX_FREQ=$(CPU_MAX_FREQ)
+CPPFLAGS += -DMAX_PHYS_THRS=$(MAX_PHYS_THRS)
+
+USE_MALLOC ?= 0
+FILTER ?= 0.50
+SORT_ALG ?= 5
+
+ifeq ($(USE_MALLOC),1)
+DEFINES  += -DUSE_MALLOC
+endif
+
+# percentage of the log to free-up
+THRESHOLD ?= 0.0
+# sleep time of the log manager (nano-seconds)
+PERIOD ?= 10
+LOG_SIZE ?= 10000
+
+USE_MIN_NVM ?= 1
+IS_BATCH ?= 0
+
+ifeq ($(USE_MIN_NVM),1)
+CPPFLAGS += -DUSE_MIN_NVM
+endif
+
+ifeq ($(IS_BATCH),1)
+CPPFLAGS += -DAPPLY_BATCH_TX
+endif
+
+SOLUTION ?= HTM
+
+ifeq ($(SOLUTION),HTM)
+CPPFLAGS += -I $(NVM_HTM)/htm_only
+CPPFLAGS += -DHTM_ONLY
+endif
+
+ifeq ($(SOLUTION),AVNI)
+CPPFLAGS += -I $(NVM_HTM)/phtm
+CPPFLAGS += -DAVNI_SOL
+endif
+
+ifeq ($(SOLUTION),NVHTM_LC)
+CPPFLAGS += -I $(NVM_HTM)/nvhtm_common -I $(NVM_HTM)/nvhtm_lc
+CPPFLAGS += -DREDO_COUNTER -DVALIDATION=2 -DDO_CHECKPOINT=$(DO_CHECKPOINT)
+endif
+
+ifeq ($(SOLUTION),NVHTM_PC)
+CPPFLAGS += -I $(NVM_HTM)/nvhtm_common -I $(NVM_HTM)/nvhtm_pc
+CPPFLAGS += -DREDO_TS -DVALIDATION=3 -DDO_CHECKPOINT=$(DO_CHECKPOINT)
+endif
+
+CPPFLAGS += -DLOG_THRESHOLD=$(THRESHOLD)
+CPPFLAGS += -DLOG_PERIOD=$(PERIOD)
+CPPFLAGS += -DNVMHTM_LOG_SIZE=$(LOG_SIZE)
+CPPFLAGS += -DSORT_ALG=$(SORT_ALG)
+CPPFLAGS += -DLOG_FILTER_THRESHOLD=$(FILTER)
+
+CPPFLAGS += -I $(ARCH_DEP_PATH)/include
+CPPFLAGS += -I $(HTM_ALG_DEP_PATH)/include
+
+CPPFLAGS += -I$(LIB_MIN_NVM_PATH)/include
+CPPFLAGS += -I$(ARCH_DEP_PATH)/include
+CPPFLAGS += -I$(HTM_ALG_DEP_PATH)/include
+CPPFLAGS += -I$(NVM_HTM)/common
+CPPFLAGS += -I$(LIB_PMEM_PATH)/include
+
+ifeq ($(PHASED_STM), tinystm)
+  LIBDIR   ?= ../../../tinySTM
+  CPPFLAGS += -DSTM=TinySTM -I$(LIBDIR)/include 
+  LDFLAGS  += -L$(LIBDIR)/lib -lstm
+  LIBDEPS    += $(LIBDIR)/lib/libstm.a
+else
+  ifeq ($(PHASED_STM), norec)
+    LIBDIR ?= ../../../NOrec
+    CPPFLAGS += -DSTM=NOrec -I$(LIBDIR)/include 
+    LDFLAGS  += -L$(LIBDIR) -lnorec
+    LIBDEPS  += $(LIBDIR)/libnorec.a
+  else
+	  $(error no STM specified!)
+  endif
+endif
+
+LDFLAGS += -L$(NVM_HTM) -lnh
+#LDFLAGS += -L$(LIB_PMEM_PATH)/lib -lpmem
+LDFLAGS += -L$(LIB_PMEM_PATH)/lib 
+LDFLAGS += -L$(HTM_ALG_DEP_PATH)/bin -l htm_sgl
+
+TMLIB += $(NVM_HTM)/libnh.a
+TMLIB += $(HTM_ALG_DEP_PATH)/bin/libhtm_sgl.a
+TMLIB += $(LIB_MIN_NVM_PATH)/bin/libminimal_nvm.a
+
+CPPFLAGS += -I$(LIB_MIN_NVM_PATH)/include -I$(ARCH_DEP_PATH)/include
+LDFLAGS  += -lrt -L$(LIB_MIN_NVM_PATH)/bin -lminimal_nvm
+LIBDEPS  += $(LIB_MIN_NVM_PATH)/bin/libminimal_nvm.a
+
+ARCH = $(shell uname -m)
+
+ifeq ($(ARCH), x86_64)
+  # Intel RTM
+  CFLAGS += -mrtm 
+else
+  ifeq ($(ARCH), ppc64le)
+    # IBM PowerTM
+    CFLAGS += -mhtm
+  else
+	  $(error unsupported architecture)
+  endif
+endif
+
+CPPFLAGS += -I../ -I../../../htm -I../../../phasedTM
+LDFLAGS  += -L../../../phasedTM/ -lphTM
+LIBDEPS  += ../../../phasedTM/libphTM.a
+
+
+include ../common/Makefile.common

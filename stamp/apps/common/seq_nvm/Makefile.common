@@ -1,0 +1,23 @@
+#TMBUILD ?= norec
+
+# ======== Defines ========
+CC       := $(CXX)
+
+ARCH_DEP_PATH = ../../../nvhtm/arch_dep
+LIB_MIN_NVM_PATH = ../../../nvhtm/minimal_nvm
+
+CPPFLAGS += -DNDEBUG
+CPPFLAGS += -I../lib -I../common/$(TMBUILD)
+CPPFLAGS += -I$(LIB_MIN_NVM_PATH)/include -I$(ARCH_DEP_PATH)/include
+CFLAGS   += -Wall -Wextra
+CFLAGS   += -g -O1 -mrtm
+
+LD       := $(CXX)
+LDFLAGS  += -lpthread
+
+#TMLIBDIR ?= ../../../NOrec
+#CPPFLAGS += -I$(TMLIBDIR)/include
+LDFLAGS  += -lrt -L$(LIB_MIN_NVM_PATH)/bin -lminimal_nvm
+LIBDEPS  += $(LIB_MIN_NVM_PATH)/bin/libminimal_nvm.a
+
+include ../common/Makefile.common

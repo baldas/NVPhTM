@@ -1,0 +1,49 @@
+# ========= MSR =========
+
+ARCH = $(shell uname -m)
+
+ifeq ($(ARCH), x86_64)
+  MSR = ../../../msr
+
+  CPPFLAGS += -I$(MSR) -DCACHE_LINE_SIZE=64
+  LDFLAGS  += -L$(MSR) -lmsr -lm
+
+  ifdef PROFILING
+    CPPFLAGS += -D$(PROFILING)
+  endif
+endif
+
+ifeq ($(ARCH), ppc64le)
+  ifdef PROFILING
+    CPPFLAGS += -D$(PROFILING)
+  endif
+  CPPFLAGS += -DCACHE_LINE_SIZE=128
+  CFLAGS += -mtune=power8
+endif
+
+# ======== Rules ========
+OBJDIR = ../../$(TMBUILD)/$(PROG)/
+
+_OBJS = $(patsubst %,$(OBJDIR)/%,$(OBJS))
+_PROG = $(OBJDIR)/$(PROG)
+
+.PHONY: default
+default: $(PROG)
+
+.PHONY: $(PROG)
+$(PROG): $(_PROG)
+
+.PHONY: clean
+clean:
+	$(RM) $(_OBJS) $(_PROG)
+
+$(_PROG): $(_OBJS) $(LIBDEPS)
+	$(LD) $^ $(LDFLAGS) -o $(_PROG)
+
+$(OBJDIR)/%.o: %.c *.h ../lib/*.h
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+
+$(OBJDIR)/lib_%.o: ../lib/%.c ../lib/*.h
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+	
