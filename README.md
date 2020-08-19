@@ -47,8 +47,6 @@ After the script is over, you will notice a new directory named
 and in the subfolder `logs` you will find the output for each experiment executed.
 
 
-TO BE ADDED
-----
-
-The scripts to do pos-processing and plotting.
+To plot the graphs, take a look at 'plot-table.py' and change the variables
+pointed out in the file to reflect your settings. 
 
